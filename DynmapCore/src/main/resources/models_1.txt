@@ -340,15 +340,11 @@ patchblock:id=powered_rail,id=detector_rail,id=activator_rail,data=4,data=10,pat
 # Activator Rail - ascending to west 
 patchblock:id=powered_rail,id=detector_rail,id=activator_rail,data=5,data=11,patch0=SlopeXUpZTop@90
 
-
-# Ladder - attached to east side of block
-patchblock:id=ladder,data=2,patch0=VertX0In@270
-# Ladder - attached to west side of block
-patchblock:id=ladder,data=3,patch0=VertX0In@90
-# Ladder - attached to north side of block
-patchblock:id=ladder,data=4,patch0=VertX0In@180
-# Ladder - attached to south side of block
-patchblock:id=ladder,data=5,patch0=VertX0In
+# Ladder
+patchblock:id=ladder,data=0,data=1,patch0=VertX0In@270
+patchblock:id=ladder,data=2,data=3,patch0=VertX0In@90
+patchblock:id=ladder,data=4,data=5,patch0=VertX0In@180
+patchblock:id=ladder,data=6,data=7,patch0=VertX0In
 # Wall sign - facing east
 [-1.13.2]patchblock:id=wall_sign,data=0-1,patch0=WSignFront,patch1=WSignBack,patch2=WSignTop,patch3=WSignBottom,patch4=WSignLeft,patch5=WSignRight
 [1.14-]patchblock:id=oak_wall_sign,id=birch_wall_sign,id=spruce_wall_sign,id=acacia_wall_sign,id=jungle_wall_sign,id=dark_oak_wall_sign,data=0-1,patch0=WSignFront,patch1=WSignBack,patch2=WSignTop,patch3=WSignBottom,patch4=WSignLeft,patch5=WSignRight
@@ -1615,3 +1611,15 @@ patchblock:id=bubble_column
 [1.14-]patchrotate:id=bell,data=14,roty=270
 [1.14-]patchblock:id=bell,data=13
 [1.14-]patchrotate:id=bell,data=14,roty=90
+
+# 1.15 blocks
+# Beenest
+[1.15-]boxlist:id=bee_nest,id=beehive,data=0-5,box=0:1:0:1:0:1:0/1/3/3/2/3
+[1.15-]patchblock:id=bee_nest,id=beehive,data=6-11
+[1.15-]patchrotate:id=bee_nest,data=0,roty=180
+[1.15-]patchblock:id=bee_nest,id=beehive,data=12-17
+[1.15-]patchrotate:id=bee_nest,data=0,roty=270
+[1.15-]patchblock:id=bee_nest,id=beehive,data=18-23
+[1.15-]patchrotate:id=bee_nest,data=0,roty=90
+# Honey block
+[1.15-]boxlist:id=honey_block,box=0:1:0:1:0:1:1/1/1/1/1/1,box=0.0625:0.9375:0.0625:0.9375:0.0625:0.9375:0/1/2/2/2/2

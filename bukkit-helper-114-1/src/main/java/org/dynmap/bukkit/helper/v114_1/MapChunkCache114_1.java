@@ -1,7 +1,6 @@
 package org.dynmap.bukkit.helper.v114_1;
 
 import org.bukkit.block.Biome;
-import org.bukkit.craftbukkit.libs.jline.internal.Log;
 import org.bukkit.craftbukkit.v1_14_R1.CraftWorld;
 
 import java.io.IOException;
@@ -210,7 +209,9 @@ public class MapChunkCache114_1 extends AbstractMapChunkCache {
 	            		}
 	            	}
 	            }
-	            cursect.emitlight = sec.getByteArray("BlockLight");
+	            if (sec.hasKey("BlockLight")) {
+	            	cursect.emitlight = sec.getByteArray("BlockLight");
+	            }
 	            if (sec.hasKey("SkyLight")) {
 	                cursect.skylight = sec.getByteArray("SkyLight");
 	            }

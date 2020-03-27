@@ -11,6 +11,7 @@ import java.io.InputStreamReader;
 import java.io.Reader;
 import java.io.Writer;
 import java.lang.reflect.Constructor;
+import java.lang.reflect.Field;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.URI;
@@ -48,15 +49,13 @@ import org.dynmap.markers.MarkerAPI;
 import org.dynmap.markers.impl.MarkerAPIImpl;
 import org.dynmap.modsupport.ModSupportImpl;
 import org.dynmap.renderer.DynmapBlockState;
-import org.dynmap.servlet.FileResourceHandler;
-import org.dynmap.servlet.JettyNullLogger;
-import org.dynmap.servlet.LoginServlet;
-import org.dynmap.servlet.MapStorageResourceHandler;
+import org.dynmap.servlet.*;
 import org.dynmap.storage.MapStorage;
 import org.dynmap.storage.filetree.FileTreeMapStorage;
 import org.dynmap.storage.mysql.MySQLMapStorage;
 import org.dynmap.storage.mariadb.MariaDBMapStorage;
 import org.dynmap.storage.sqllte.SQLiteMapStorage;
+import org.dynmap.storage.postgresql.PostgreSQLMapStorage;
 import org.dynmap.utils.BlockStep;
 import org.dynmap.utils.ImageIOManager;
 import org.dynmap.web.BanIPFilter;
@@ -64,10 +63,12 @@ import org.dynmap.web.CustomHeaderFilter;
 import org.dynmap.web.FilterHandler;
 import org.dynmap.web.HandlerRouter;
 import org.eclipse.jetty.server.Connector;
+import org.eclipse.jetty.server.NetworkTrafficServerConnector;
 import org.eclipse.jetty.server.Server;
+import org.eclipse.jetty.server.handler.AllowSymLinkAliasChecker;
+import org.eclipse.jetty.server.handler.ContextHandler;
 import org.eclipse.jetty.server.handler.HandlerList;
-import org.eclipse.jetty.server.nio.SelectChannelConnector;
-import org.eclipse.jetty.server.session.HashSessionIdManager;
+import org.eclipse.jetty.server.session.DefaultSessionIdManager;
 import org.eclipse.jetty.server.session.SessionHandler;
 import org.eclipse.jetty.servlet.ServletHolder;
 import org.eclipse.jetty.util.resource.FileResource;
@@ -83,7 +84,7 @@ public class DynmapCore implements DynmapCommonAPI {
      */
     public static abstract class EnableCoreCallbacks {
         /**
-         * Called during enableCore to report that confniguration.txt is loaded
+         * Called during enableCore to report that configuration.txt is loaded
          */
         public abstract void configurationLoaded();
     }
@@ -387,6 +388,9 @@ public class DynmapCore implements DynmapCommonAPI {
         }
         else if (storetype.equals("mariadb")) {
             defaultStorage = new MariaDBMapStorage();
+        }
+        else if (storetype.equals("postgres") || storetype.equals("postgresql")) {
+            defaultStorage = new PostgreSQLMapStorage();
         }
         else {
             Log.severe("Invalid storage type for map data: " + storetype);
@@ -763,22 +767,18 @@ public class DynmapCore implements DynmapCommonAPI {
         }
         webhostname = configuration.getString("webserver-bindaddress", ip);
         webport = configuration.getInteger("webserver-port", 8123);
-        
-        webServer = new Server();
-        webServer.setSessionIdManager(new HashSessionIdManager());
 
         int maxconnections = configuration.getInteger("max-sessions", 30);
         if(maxconnections < 2) maxconnections = 2;
         LinkedBlockingQueue<Runnable> queue = new LinkedBlockingQueue<Runnable>(maxconnections);
-        ExecutorThreadPool pool = new ExecutorThreadPool(2, maxconnections, 60, TimeUnit.SECONDS, queue);
-        webServer.setThreadPool(pool);
-        
-        SelectChannelConnector connector=new SelectChannelConnector();
-        connector.setMaxIdleTime(5000);
-        connector.setAcceptors(1);
+        ExecutorThreadPool pool = new ExecutorThreadPool(maxconnections, 2, queue);
+
+        webServer = new Server(pool);
+        webServer.setSessionIdManager(new DefaultSessionIdManager(webServer));
+
+        NetworkTrafficServerConnector connector = new NetworkTrafficServerConnector(webServer);
+        connector.setIdleTimeout(5000);
         connector.setAcceptQueueSize(50);
-        connector.setLowResourcesMaxIdleTime(1000);
-        connector.setLowResourcesConnections(maxconnections/2);
         if(webhostname.equals("0.0.0.0") == false)
             connector.setHost(webhostname);
         connector.setPort(webport);
@@ -786,15 +786,37 @@ public class DynmapCore implements DynmapCommonAPI {
 
         webServer.setStopAtShutdown(true);
         //webServer.setGracefulShutdown(1000);
-        
         final boolean allow_symlinks = configuration.getBoolean("allow-symlinks", false);
         router = new HandlerRouter() {{
-            this.addHandler("/", new FileResourceHandler() {{
-                this.setAliases(allow_symlinks);
+            FileResourceHandler fileResourceHandler = new FileResourceHandler() {{
                 this.setWelcomeFiles(new String[] { "index.html" });
+                this.setRedirectWelcome(false);
                 this.setDirectoriesListed(true);
                 this.setBaseResource(createFileResource(getFile(getWebPath()).getAbsolutePath()));
-            }});
+            }};
+            try {
+                fileResourceHandler.doStart();
+            }catch (Exception ex){
+                ex.printStackTrace();
+                Log.severe("Failed to start resource handler: "+ex.getMessage());
+            }
+            ContextHandler fileResourceContext = new ContextHandler();
+            fileResourceContext.setHandler(fileResourceHandler);
+            fileResourceContext.clearAliasChecks();
+            if (allow_symlinks){
+                fileResourceContext.addAliasCheck(new ContextHandler.ApproveAliases());
+                fileResourceContext.addAliasCheck(new ContextHandler.ApproveNonExistentDirectoryAliases());
+                fileResourceContext.addAliasCheck(new AllowSymLinkAliasChecker());
+            }
+            try {
+                Class<?> handlerClass = fileResourceHandler.getClass().getSuperclass().getSuperclass();
+                Field field = handlerClass.getDeclaredField("_context");
+                field.setAccessible(true);
+                field.set(fileResourceHandler,fileResourceContext);
+            }catch (Exception e){
+                Log.severe("Failed to initialize resource handler: "+e.getMessage());
+            }
+            this.addHandler("/", fileResourceHandler);
             this.addHandler("/tiles/*", new MapStorageResourceHandler() {{
                 this.setCore(DynmapCore.this);
             }});
@@ -818,12 +840,15 @@ public class DynmapCore implements DynmapCommonAPI {
         filters.add(new CustomHeaderFilter(configuration.getNode("http-response-headers")));
 
         FilterHandler fh = new FilterHandler(router, filters);
+        ContextHandler contextHandler = new ContextHandler();
+        contextHandler.setContextPath("/");
+        contextHandler.setHandler(fh);
         HandlerList hlist = new HandlerList();
-        hlist.setHandlers(new org.eclipse.jetty.server.Handler[] { new SessionHandler(), fh });
+        hlist.setHandlers(new org.eclipse.jetty.server.Handler[] { new SessionHandler(), contextHandler });
         webServer.setHandler(hlist);
         
-        addServlet("/up/configuration", new org.dynmap.servlet.ClientConfigurationServlet(this));
-        addServlet("/standalone/config.js", new org.dynmap.servlet.ConfigJSServlet(this));
+        addServlet("/up/configuration", new ClientConfigurationServlet(this));
+        addServlet("/standalone/config.js", new ConfigJSServlet(this));
         if(authmgr != null) {
             LoginServlet login = new LoginServlet(this);
             addServlet("/up/login", login);
@@ -1042,7 +1067,9 @@ public class DynmapCore implements DynmapCommonAPI {
         new CommandInfo("dynmap", "render", "Renders the tile at your location."),
         new CommandInfo("dynmap", "fullrender", "Render all maps for entire world from your location."),
         new CommandInfo("dynmap", "fullrender", "<world>", "Render all maps for world <world>."),
-        new CommandInfo("dynmap", "fullrender", "<world>:<map>", "Render map <map> of world'<world>."),
+        new CommandInfo("dynmap", "fullrender", "<world>:<map>", "Render map <map> of world <world>."),
+        new CommandInfo("dynmap", "fullrender", "resume <world>", "Resume render of all maps for world <world>. Skip already rendered tiles."),
+        new CommandInfo("dynmap", "fullrender", "resume <world>:<map>", "Resume render of map <map> of world <world>. Skip already rendered tiles."),
         new CommandInfo("dynmap", "radiusrender", "<radius>", "Render at least <radius> block radius from your location on all maps."),
         new CommandInfo("dynmap", "radiusrender", "<radius> <mapname>", "Render at least <radius> block radius from your location on map <mapname>."),
         new CommandInfo("dynmap", "radiusrender", "<world> <x> <z> <radius>", "Render at least <radius> block radius from location <x>,<z> on world <world>."),
@@ -1315,7 +1342,7 @@ public class DynmapCore implements DynmapCommonAPI {
                         loc = new DynmapLocation(w.getName(), x, 64, z);
                 }
                 if(loc != null)
-                    mapManager.renderFullWorld(loc, sender, mapname, true);
+                    mapManager.renderFullWorld(loc, sender, mapname, true, false);
             } else if (c.equals("hide")) {
                 if (args.length == 1) {
                     if(player != null && checkPlayerPermission(sender,"hide.self")) {
@@ -1343,7 +1370,12 @@ public class DynmapCore implements DynmapCommonAPI {
             } else if (c.equals("fullrender") && checkPlayerPermission(sender,"fullrender")) {
                 String map = null;
                 if (args.length > 1) {
+                    boolean resume = false;
                     for (int i = 1; i < args.length; i++) {
+                        if (args[i].equalsIgnoreCase("resume")) {
+                             resume = true;
+                             continue;
+                        }
                         int dot = args[i].indexOf(":");
                         DynmapWorld w;
                         String wname = args[i];
@@ -1358,7 +1390,7 @@ public class DynmapCore implements DynmapCommonAPI {
                                 loc = w.center;
                             else
                                 loc = w.getSpawnLocation();
-                            mapManager.renderFullWorld(loc,sender, map, false);
+                            mapManager.renderFullWorld(loc,sender, map, false, resume);
                         }
                         else
                             sender.sendMessage("World '" + wname + "' not defined/loaded");
@@ -1368,7 +1400,7 @@ public class DynmapCore implements DynmapCommonAPI {
                     if(args.length > 1)
                         map = args[1];
                     if(loc != null)
-                        mapManager.renderFullWorld(loc, sender, map, false);
+                        mapManager.renderFullWorld(loc, sender, map, false, false);
                 } else {
                     sender.sendMessage("World name is required");
                 }
@@ -2389,10 +2421,10 @@ public class DynmapCore implements DynmapCommonAPI {
     }
 
     @Override
-    public void processSignChange(int blkid, String world, int x, int y, int z,
+    public void processSignChange(String material, String world, int x, int y, int z,
             String[] lines, String playerid) {
         DynmapPlayer dp = server.getPlayer(playerid);
-        listenerManager.processSignChangeEvent(EventType.SIGN_CHANGE, blkid, world, x, y, z, lines, dp);
+        listenerManager.processSignChangeEvent(EventType.SIGN_CHANGE, material, world, x, y, z, lines, dp);
     }
     
     public MapStorage getDefaultMapStorage() {

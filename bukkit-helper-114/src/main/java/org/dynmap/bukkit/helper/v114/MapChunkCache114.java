@@ -209,7 +209,9 @@ public class MapChunkCache114 extends AbstractMapChunkCache {
 	            		}
 	            	}
 	            }
-	            cursect.emitlight = sec.getByteArray("BlockLight");
+	            if (sec.hasKey("BlockLight")) {
+	            	cursect.emitlight = sec.getByteArray("BlockLight");
+	            }
 	            if (sec.hasKey("SkyLight")) {
 	                cursect.skylight = sec.getByteArray("SkyLight");
 	            }
